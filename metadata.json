@@ -1,0 +1,5 @@
+{
+  "name": "Free Video Captions",
+  "description": "Automatically generate accurate multilingual captions for your videos using Gemini 3 Flash. Upload a video, select languages, get SRT subtitles, and view content insights.",
+  "requestFramePermissions": []
+}
