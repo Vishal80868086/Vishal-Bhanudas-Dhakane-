@@ -2,16 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import Header from './components/Header';
 import VideoUploader from './components/VideoUploader';
 import ResultsView from './components/ResultsView';
-import ImageEditor from './components/ImageEditor';
 import Logo from './components/Logo';
 import { AppState, VideoFile, AnalysisResult } from './types';
 import { generateVideoCaptions } from './services/geminiService';
 import { CAPTION_LANGUAGES } from './constants';
 
-type AppMode = 'video' | 'image';
-
 const App: React.FC = () => {
-  const [mode, setMode] = useState<AppMode>('video');
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
   const [currentVideo, setCurrentVideo] = useState<VideoFile | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
@@ -23,9 +19,42 @@ const App: React.FC = () => {
   const [sourceLang, setSourceLang] = useState<string>('auto');
   const [targetLang, setTargetLang] = useState<string>('hi');
   const [maxWords, setMaxWords] = useState<number>(6); // Default to short, punchy captions
+  const [isQuickPreview, setIsQuickPreview] = useState<boolean>(false);
   
   // Reference to the AbortController to cancel ongoing requests
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Wake Lock and BeforeUnload protection
+  useEffect(() => {
+    let wakeLock: any = null;
+
+    const requestWakeLock = async () => {
+      if ('wakeLock' in navigator) {
+        try {
+          wakeLock = await (navigator as any).wakeLock.request('screen');
+        } catch (err: any) {
+          console.warn(`Wake Lock error: ${err.name}, ${err.message}`);
+        }
+      }
+    };
+
+    if (appState === AppState.UPLOADING || appState === AppState.PROCESSING) {
+      requestWakeLock();
+      
+      // Prevent accidental tab close
+      const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+        e.preventDefault();
+        e.returnValue = ''; // Chrome requires returnValue to be set
+        return '';
+      };
+      window.addEventListener('beforeunload', handleBeforeUnload);
+
+      return () => {
+        if (wakeLock) wakeLock.release().catch(() => {});
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+      };
+    }
+  }, [appState]);
 
   // Clean up object URLs to prevent memory leaks
   useEffect(() => {
@@ -51,6 +80,11 @@ const App: React.FC = () => {
       });
 
       setAppState(AppState.PROCESSING);
+      
+      // NOTE: We do NOT slice the file here anymore because slicing raw bytes corrupts the video container (e.g. MP4 atoms),
+      // causing Gemini to fail processing with "The file failed to be processed".
+      // Instead, we pass the 'isQuickPreview' flag to the service to instruct the model to only analyze the start.
+      
       await processVideo(file);
 
     } catch (e: any) {
@@ -81,7 +115,8 @@ const App: React.FC = () => {
           setStatusMessage(status);
           setUploadProgress(progress);
         },
-        controller.signal
+        controller.signal,
+        isQuickPreview
       );
       
       // Clear controller on success
@@ -126,64 +161,45 @@ const App: React.FC = () => {
     return lang?.name || 'Hindi';
   };
 
-  // Switch logic to reset states when changing modes
-  const handleModeChange = (newMode: AppMode) => {
-    if (newMode === mode) return;
-    setMode(newMode);
-    // Optional: Reset states if switching modes
-    // resetApp(); 
-  };
-
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col">
-      <Header currentMode={mode} setMode={handleModeChange} />
+      <Header />
 
       <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-8">
         
-        {/* Intro Hero (Video Mode Only) */}
-        {mode === 'video' && appState === AppState.IDLE && (
+        {/* Intro Hero */}
+        {appState === AppState.IDLE && (
           <div className="text-center mb-12 flex flex-col items-center">
             <Logo className="w-20 h-20 mb-6 shadow-2xl shadow-indigo-500/20" />
             <h1 className="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 via-purple-300 to-pink-300 mb-6 tracking-tight">
               AI Video Captions
             </h1>
-            <p className="text-lg text-slate-400 max-w-2xl mx-auto mb-8">
-              Upload your video and let Gemini 3 Flash analyze the audio to generate accurate, synchronized subtitles automatically.
-            </p>
           </div>
         )}
 
-        {/* IMAGE MODE */}
-        {mode === 'image' && (
-           <div className="animate-fade-in">
-             <ImageEditor />
-           </div>
-        )}
-
-        {/* VIDEO MODE */}
-        {mode === 'video' && (
-          <>
-            {/* State: IDLE / Uploading */}
-            {(appState === AppState.IDLE || appState === AppState.UPLOADING) && (
-              <div className="transition-all duration-500 ease-in-out transform animate-fade-in">
-                <VideoUploader 
-                  onFileSelect={handleFileSelect} 
-                  isLoading={appState === AppState.UPLOADING}
-                  sourceLang={sourceLang}
-                  setSourceLang={setSourceLang}
-                  targetLang={targetLang}
-                  setTargetLang={setTargetLang}
-                  maxWords={maxWords}
-                  setMaxWords={setMaxWords}
-                />
-                {appState === AppState.UPLOADING && (
-                  <div className="mt-8 text-center animate-pulse">
-                    <div className="inline-block w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                    <p className="text-indigo-400 font-medium">Preparing...</p>
-                  </div>
-                )}
+        {/* State: IDLE / Uploading */}
+        {(appState === AppState.IDLE || appState === AppState.UPLOADING) && (
+          <div className="transition-all duration-500 ease-in-out transform animate-fade-in">
+            <VideoUploader 
+              onFileSelect={handleFileSelect} 
+              isLoading={appState === AppState.UPLOADING}
+              sourceLang={sourceLang}
+              setSourceLang={setSourceLang}
+              targetLang={targetLang}
+              setTargetLang={setTargetLang}
+              maxWords={maxWords}
+              setMaxWords={setMaxWords}
+              isQuickPreview={isQuickPreview}
+              setIsQuickPreview={setIsQuickPreview}
+            />
+            {appState === AppState.UPLOADING && (
+              <div className="mt-8 text-center animate-pulse">
+                <div className="inline-block w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                <p className="text-indigo-400 font-medium">Preparing...</p>
               </div>
             )}
+          </div>
+        )}
 
             {/* State: PROCESSING */}
             {appState === AppState.PROCESSING && (
@@ -278,8 +294,7 @@ const App: React.FC = () => {
                 </button>
               </div>
             )}
-          </>
-        )}
+
 
       </main>
 

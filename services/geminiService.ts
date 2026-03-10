@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Part } from "@google/genai";
-import { GEMINI_MODEL_NAME, GEMINI_IMAGE_MODEL_NAME, CAPTION_LANGUAGES, SOURCE_LANGUAGES } from "../constants";
+import { GEMINI_MODEL_NAME, CAPTION_LANGUAGES, SOURCE_LANGUAGES } from "../constants";
 import { AnalysisResult } from "../types";
 import { fileToBase64 } from "../utils/fileUtils";
 
@@ -7,6 +7,24 @@ import { fileToBase64 } from "../utils/fileUtils";
 const API_KEY = process.env.API_KEY || '';
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
+
+const getMimeType = (file: File): string => {
+  if (file.type && file.type !== '') return file.type;
+  
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'mp4': return 'video/mp4';
+    case 'webm': return 'video/webm';
+    case 'mov': return 'video/quicktime';
+    case 'avi': return 'video/x-msvideo';
+    case 'flv': return 'video/x-flv';
+    case 'wmv': return 'video/x-ms-wmv';
+    case 'mpeg': 
+    case 'mpg': return 'video/mpeg';
+    case '3gp': return 'video/3gpp';
+    default: return 'video/mp4'; // Fallback
+  }
+};
 
 const getPrompt = (sourceLangCode: string, targetLangCode: string, maxWords: number) => {
   const sourceLangName = SOURCE_LANGUAGES.find(l => l.code === sourceLangCode)?.name || 'Auto-detect';
@@ -27,6 +45,7 @@ const getPrompt = (sourceLangCode: string, targetLangCode: string, maxWords: num
 Context: ${sourceInstruction}
 Task 1: Generate accurate ${targetInstruction} for the speech in the video. Format strictly as SRT (SubRip Subtitle).
 Constraint: Maximum ${maxWords} words per subtitle line. Strictly adhere to this limit. Break longer sentences into multiple lines with accurate timestamps.
+CRITICAL: Timestamps must be perfectly synchronized with the spoken audio. Do not drift. Match the exact start and end times of each speech segment.
 Task 2: Analyze the video content and identify top 5 key topics/themes with a relevance score (0-100).
 Task 3: Write a short 1-sentence summary of the video in English.
 
@@ -85,7 +104,7 @@ async function uploadFileToGemini(
   
   try {
     // Fallback mimeType if file.type is empty (common with some containers)
-    const mimeType = file.type || 'video/mp4';
+    const mimeType = getMimeType(file);
     
     // Simulate upload progress since SDK doesn't expose it
     if (onProgress) {
@@ -103,6 +122,13 @@ async function uploadFileToGemini(
            clearInterval(progressInterval);
            return;
         }
+        
+        if (progress >= 95) {
+           // Stuck at 95% means the upload is taking longer than estimated or finalizing
+           onProgress("Finalizing upload... This may take a moment.", 95);
+           return;
+        }
+
         progress = Math.min(progress + increment, 95);
         const noise = Math.random() * 0.2;
         onProgress("Uploading video to Gemini...", Math.floor(progress + noise));
@@ -113,6 +139,12 @@ async function uploadFileToGemini(
     const response = await retry(async () => {
       if (signal?.aborted) throw new Error("Operation cancelled by user");
       try {
+        // NOTE: We intentionally do NOT pass mimeType in config here to let Gemini detect it if possible,
+        // or rely on the file object's type if the SDK uses it.
+        // Actually, passing the correct mimeType is crucial.
+        // If previous attempts failed, maybe we should try a generic one?
+        // For now, let's stick to the detected one but log if it fails.
+        
         return await ai.files.upload({
           file: file,
           config: {
@@ -149,8 +181,10 @@ async function uploadFileToGemini(
     let state = uploadedFile.state;
     if (onProgress) onProgress("Processing video on Gemini servers...", undefined); 
     
+    let attempts = 0;
     while (state === "PROCESSING") {
       if (signal?.aborted) throw new Error("Operation cancelled by user");
+      attempts++;
 
       try {
         const fileInfo = await ai.files.get({ name: fileName });
@@ -158,13 +192,19 @@ async function uploadFileToGemini(
         state = currentFile.state;
         
         if (state === "FAILED") {
-          throw new Error("Video processing failed on Gemini servers.");
+          console.error("Gemini File Processing Failed. File Info:", JSON.stringify(currentFile, null, 2));
+          // If it failed, throw specific error with details if available
+          const errorMsg = currentFile.error ? `: ${currentFile.error.message}` : '';
+          throw new Error(`Video processing failed on Gemini servers${errorMsg}. Please ensure the video format is supported.`);
         }
         if (state === "PROCESSING") {
-          await delayWithAbort(5000, signal);
+          // Backoff polling
+          const delay = Math.min(2000 * Math.pow(1.5, attempts), 10000);
+          await delayWithAbort(delay, signal);
         }
       } catch (e: any) {
         if (e.message === "Operation cancelled by user") throw e;
+        if (e.message?.includes("Video processing failed")) throw e; // Propagate failure immediately
 
         // If get fails with 404, it might be propagation delay, retry a few times
         if (e.message?.includes("404") || e.status === 404) {
@@ -201,7 +241,8 @@ export const generateVideoCaptions = async (
   targetLang: string,
   maxWords: number,
   onProgress?: (status: string, progress?: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  isQuickPreview: boolean = false
 ): Promise<AnalysisResult> => {
   
   if (!API_KEY) {
@@ -222,7 +263,7 @@ export const generateVideoCaptions = async (
       const base64Video = await fileToBase64(file);
       contentPart = {
         inlineData: {
-          mimeType: file.type || 'video/mp4',
+          mimeType: getMimeType(file),
           data: base64Video
         }
       };
@@ -232,7 +273,7 @@ export const generateVideoCaptions = async (
       contentPart = {
         fileData: {
           fileUri: fileUri,
-          mimeType: file.type || 'video/mp4'
+          mimeType: getMimeType(file)
         }
       };
     }
@@ -240,7 +281,11 @@ export const generateVideoCaptions = async (
     if (signal?.aborted) throw new Error("Operation cancelled by user");
     if (onProgress) onProgress("Generating captions and insights...", undefined);
     
-    const prompt = getPrompt(sourceLang, targetLang, maxWords);
+    let prompt = getPrompt(sourceLang, targetLang, maxWords);
+    
+    if (isQuickPreview) {
+      prompt += "\n\nIMPORTANT: This is a QUICK PREVIEW. Only analyze the first 2 minutes of the video content. Stop generating captions after the 2-minute mark.";
+    }
 
     // Add retry for generateContent as well
     const response = await retry(async () => {
@@ -296,55 +341,3 @@ export const generateVideoCaptions = async (
   }
 };
 
-/**
- * Edit an image using Gemini 2.5 Flash Image with a text prompt.
- */
-export const editImage = async (
-  imageFile: File,
-  prompt: string,
-  signal?: AbortSignal
-): Promise<string> => {
-  if (!API_KEY) throw new Error("API Key is missing.");
-
-  try {
-    const base64Image = await fileToBase64(imageFile);
-
-    if (signal?.aborted) throw new Error("Operation cancelled by user");
-
-    const response = await ai.models.generateContent({
-      model: GEMINI_IMAGE_MODEL_NAME,
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: imageFile.type,
-              data: base64Image,
-            },
-          },
-          {
-            text: prompt,
-          },
-        ],
-      },
-    });
-
-    if (signal?.aborted) throw new Error("Operation cancelled by user");
-
-    // The response should contain the generated image in one of the parts.
-    if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData && part.inlineData.data) {
-          return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-        }
-      }
-    }
-    
-    throw new Error("The model did not return an image. It might have returned text instead.");
-
-  } catch (error: any) {
-    if (error.message !== "Operation cancelled by user") {
-       console.error("Gemini Image Edit Error:", error);
-    }
-    throw error;
-  }
-};

@@ -1,10 +1,26 @@
 // Using Gemini 3 Flash Preview for multimodal capabilities (video processing) and text generation
 export const GEMINI_MODEL_NAME = 'gemini-3-flash-preview';
-export const GEMINI_IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
 
 export const MAX_FILE_SIZE_MB = 5120; // 5 GB
 export const ACCEPTED_VIDEO_TYPES = "video/mp4,video/webm,video/quicktime";
-export const ACCEPTED_IMAGE_TYPES = "image/jpeg,image/png,image/webp";
+
+export const PLAN_DETAILS = {
+  free: {
+    id: 'free',
+    name: 'Free',
+    price: 0,
+    currency: 'USD',
+    features: ['Unlimited Videos', '5GB File Size', 'All Languages', 'No Watermark'],
+    limits: {
+      maxVideosPerMonth: 9999,
+      maxFileSizeMB: 5120,
+      allowExport: true,
+      noWatermark: true,
+      allLanguages: true,
+      priorityProcessing: true
+    }
+  }
+};
 
 export const SAMPLE_VIDEOS = [
   {

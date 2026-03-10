@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
-import { MAX_FILE_SIZE_MB, ACCEPTED_VIDEO_TYPES, CAPTION_LANGUAGES, SOURCE_LANGUAGES } from '../constants';
+import { ACCEPTED_VIDEO_TYPES, CAPTION_LANGUAGES, SOURCE_LANGUAGES } from '../constants';
+import { useSubscription } from '../context/SubscriptionContext';
 
 interface VideoUploaderProps {
   onFileSelect: (file: File) => void;
@@ -10,6 +11,8 @@ interface VideoUploaderProps {
   setTargetLang: (lang: string) => void;
   maxWords: number;
   setMaxWords: (val: number) => void;
+  isQuickPreview: boolean;
+  setIsQuickPreview: (val: boolean) => void;
 }
 
 const VideoUploader: React.FC<VideoUploaderProps> = ({ 
@@ -20,14 +23,22 @@ const VideoUploader: React.FC<VideoUploaderProps> = ({
   targetLang, 
   setTargetLang,
   maxWords,
-  setMaxWords
+  setMaxWords,
+  isQuickPreview,
+  setIsQuickPreview
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { checkFileSize, currentPlan } = useSubscription();
 
-  const displaySize = MAX_FILE_SIZE_MB >= 1024 
-    ? `${(MAX_FILE_SIZE_MB / 1024).toFixed(0)} GB` 
-    : `${MAX_FILE_SIZE_MB} MB`;
+  const displaySize = currentPlan.limits.maxFileSizeMB >= 1024 
+    ? `${(currentPlan.limits.maxFileSizeMB / 1024).toFixed(0)} GB` 
+    : `${currentPlan.limits.maxFileSizeMB} MB`;
+
+  // Filter languages based on plan
+  const availableTargetLangs = currentPlan.limits.allLanguages 
+    ? CAPTION_LANGUAGES 
+    : CAPTION_LANGUAGES.filter(l => ['hi_auto', 'hi', 'en'].includes(l.code));
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -41,8 +52,8 @@ const VideoUploader: React.FC<VideoUploaderProps> = ({
 
   const validateAndSelect = (file: File) => {
     setError(null);
-    if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-      setError(`File too large. Max size is ${displaySize} for this demo.`);
+    if (!checkFileSize(file.size)) {
+      setError(`File too large. Max size is ${displaySize} for your ${currentPlan.name} plan.`);
       return;
     }
     if (!file.type.startsWith('video/')) {
@@ -58,7 +69,7 @@ const VideoUploader: React.FC<VideoUploaderProps> = ({
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       validateAndSelect(e.dataTransfer.files[0]);
     }
-  }, [onFileSelect]);
+  }, [onFileSelect, checkFileSize, currentPlan]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -104,13 +115,47 @@ const VideoUploader: React.FC<VideoUploaderProps> = ({
                 disabled={isLoading}
                 className="w-full appearance-none bg-slate-900 border border-slate-700 hover:border-purple-500 text-slate-200 text-sm rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-colors"
               >
-                {CAPTION_LANGUAGES.map(lang => (
+                {availableTargetLangs.map(lang => (
                   <option key={lang.code} value={lang.code}>{lang.name}</option>
                 ))}
               </select>
               <div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
                 <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
               </div>
+            </div>
+            {!currentPlan.limits.allLanguages && (
+              <p className="text-[10px] text-amber-500 mt-1 ml-1">
+                Upgrade for more languages
+              </p>
+            )}
+          </div>
+
+          {/* Quick Preview Toggle */}
+          <div className="flex flex-col md:col-span-2 bg-indigo-500/10 rounded-lg p-3 border border-indigo-500/20">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col">
+                <span className="text-sm font-medium text-indigo-200 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  Quick Preview Mode
+                </span>
+                <span className="text-[10px] text-indigo-300/70 mt-0.5">
+                  Analyzes only the first 2 minutes for instant results. Perfect for testing.
+                </span>
+              </div>
+              <button
+                onClick={() => setIsQuickPreview(!isQuickPreview)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 ${
+                  isQuickPreview ? 'bg-indigo-500' : 'bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`${
+                    isQuickPreview ? 'translate-x-6' : 'translate-x-1'
+                  } inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
+                />
+              </button>
             </div>
           </div>
 

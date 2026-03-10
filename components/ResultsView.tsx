@@ -3,6 +3,7 @@ import { AnalysisResult, CaptionSegment } from '../types';
 import { parseSRT, generateSRT, downloadTextFile } from '../utils/fileUtils';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Muxer, ArrayBufferTarget } from 'webm-muxer';
+import { useSubscription } from '../context/SubscriptionContext';
 
 // Add missing types for WebCodecs API
 declare global {
@@ -84,6 +85,7 @@ const getRgbaColor = (hex: string, opacity: number) => {
 };
 
 const ResultsView: React.FC<ResultsViewProps> = ({ result, videoUrl, targetLangName }) => {
+  const { currentPlan } = useSubscription();
   const [activeTab, setActiveTab] = useState<'captions' | 'insights'>('captions');
   
   // Editable Captions State
@@ -582,6 +584,19 @@ const ResultsView: React.FC<ResultsViewProps> = ({ result, videoUrl, targetLangN
         lineY += lineHeight;
       });
 
+      // Draw Watermark if needed
+      if (!currentPlan.limits.noWatermark) {
+        ctx.save();
+        ctx.font = `bold ${height * 0.03}px sans-serif`;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 4;
+        ctx.fillText('Created with AI Studio', width - (width * 0.02), height * 0.02);
+        ctx.restore();
+      }
+
       ctx.restore();
     }
   };
@@ -919,6 +934,13 @@ const ResultsView: React.FC<ResultsViewProps> = ({ result, videoUrl, targetLangN
               </span>
             </div>
           )}
+
+          {/* Watermark Overlay for Preview */}
+          {!currentPlan.limits.noWatermark && !isExporting && (
+            <div className="absolute top-4 right-4 pointer-events-none z-20 opacity-50">
+              <p className="text-white font-bold text-sm drop-shadow-md">Created with AI Studio</p>
+            </div>
+          )}
         </div>
         
         {/* Waveform Visualizer */}
@@ -1141,23 +1163,44 @@ const ResultsView: React.FC<ResultsViewProps> = ({ result, videoUrl, targetLangN
                 <div className="flex gap-2">
                   <button 
                     onClick={handleFastExport}
-                    disabled={isExporting}
-                    className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 shadow-lg shadow-indigo-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Render video with burned-in captions (Accelerated)"
+                    disabled={isExporting || !currentPlan.limits.allowExport}
+                    className={`text-xs px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 shadow-lg ${
+                      !currentPlan.limits.allowExport 
+                        ? 'bg-slate-700 text-slate-400 cursor-not-allowed' 
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20'
+                    } disabled:opacity-50`}
+                    title={!currentPlan.limits.allowExport ? "Upgrade to export video" : "Render video with burned-in captions (Accelerated)"}
                   >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    Export Video
+                    {!currentPlan.limits.allowExport ? (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                    )}
+                    {currentPlan.limits.allowExport ? 'Export Video' : 'Upgrade to Export'}
                   </button>
                   <button 
                     onClick={handleDownloadSRT}
-                    disabled={isExporting}
-                    className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+                    disabled={isExporting || !currentPlan.limits.allowExport}
+                    className={`text-xs px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50 ${
+                       !currentPlan.limits.allowExport 
+                        ? 'bg-slate-700 text-slate-400 cursor-not-allowed' 
+                        : 'bg-slate-700 hover:bg-slate-600 text-white'
+                    }`}
+                    title={!currentPlan.limits.allowExport ? "Upgrade to export SRT" : "Download SRT"}
                   >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
+                    {!currentPlan.limits.allowExport ? (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                    )}
                     SRT
                   </button>
                 </div>
